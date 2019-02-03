@@ -86,12 +86,12 @@ class RRTargetFinder2019(object):
                 self.distortionMatrix = numpy.array(json_data["distortion"])
 
         # Corners of the switch target in real world dimensions
-        
+
         self.all_target_coords = numpy.concatenate([self.right_strip, self.left_strip])
+        # [left_bottom, left_top, right_top, right_bottom]
         self.outside_target_coords = numpy.float32(numpy.array([self.left_strip[2], self.left_strip[1],
-                                                  self.right_strip[1], self.right_strip[2]]))
-                                                  #[left_bottom, left_top, right_top, right_bottom]
-        print(self.outside_target_coords)
+                                                                self.right_strip[1], self.right_strip[2]]))
+        # print(self.outside_target_coords)
 
         return
 
@@ -144,6 +144,45 @@ class RRTargetFinder2019(object):
         return corners
 
     @staticmethod
+    def get_outside_and_top_corners(contour, is_left):
+        '''For a single contour, find the 2 corners to the farside of the middle, plus the inner top.
+        Split the set vertically and the find the farthest in each set.'''
+
+        y_ave = 0.0
+        for cnr in contour:
+            y_ave += cnr[1]
+        y_ave /= len(contour)
+
+        # bottom outside, top outside, top inside
+        # remember: bottom = higher y
+        corners = [None, None, None]
+
+        # split the loop on left/right on the outside
+        #  much faster and simpler than trying to figure out how to flip the comparison on every iteration
+        if is_left:
+            for cnr in contour:
+                if cnr[1] > y_ave:
+                    if corners[0] is None or cnr[0] < corners[0][0]:
+                        corners[0] = cnr
+                else:
+                    if corners[1] is None or cnr[0] < corners[1][0]:
+                        corners[1] = cnr
+                    if corners[2] is None or cnr[0] > corners[2][0]:
+                        corners[2] = cnr
+        else:
+            for cnr in contour:
+                if cnr[1] > y_ave:
+                    if corners[0] is None or cnr[0] > corners[0][0]:
+                        corners[0] = cnr
+                else:
+                    if corners[1] is None or cnr[0] > corners[1][0]:
+                        corners[1] = cnr
+                    if corners[2] is None or cnr[0] < corners[2][0]:
+                        corners[2] = cnr
+
+        return corners
+
+    @staticmethod
     def get_outside_corners(cnt_left, cnt_right):
         '''Return the outer two corners of a contour'''
 
@@ -151,7 +190,7 @@ class RRTargetFinder2019(object):
         ly_ave = 0
         rx_ave = 0
         ry_ave = 0
-        
+
         for cnr in cnt_left:
             lx_ave += cnr[0]
             ly_ave += cnr[1]
@@ -163,7 +202,7 @@ class RRTargetFinder2019(object):
         rx_ave /= len(cnt_right)
         ry_ave /= len(cnt_right)
 
-        #now we have the average (center) point of each contour
+        # now we have the average (center) point of each contour
         left_cnrs = []
         for cnr in cnt_left:
             if cnr[0] < lx_ave:
@@ -172,19 +211,19 @@ class RRTargetFinder2019(object):
         for cnr in cnt_right:
             if cnr[0] > rx_ave:
                 right_cnrs.append(cnr)
-        
+
         # now, if len(cnrs) is greater than two (theoretically should be a max of three),
         # choose cnr with the lowest y (highest on image), remove it, and the cnr with the smallest x
-        
+
         image_cnrs = []
-        if len(left_cnrs) > 2:      #double checking left cnt cnrs
-            
+        if len(left_cnrs) > 2:      # double checking left cnt cnrs
+
             highest_cnr = [lx_ave, ly_ave]
             for cnr in left_cnrs:
                 if cnr[1] < highest_cnr[1]:
                     highest_cnr = cnr
             image_cnrs.append(highest_cnr)
-            
+
             leftmost_cnr = [lx_ave, ly_ave]
             for cnr in left_cnrs:
                 if cnr[0] < leftmost_cnr[0]:
@@ -193,29 +232,28 @@ class RRTargetFinder2019(object):
         else:
             image_cnrs = left_cnrs
 
-        if len(right_cnrs) > 2:      #double checking right cnt cnrs
-            
-            print("Right cnrs are: \n", right_cnrs)
-            print("Left cnrs are: \n", left_cnrs)
+        if len(right_cnrs) > 2:      # double checking right cnt cnrs
+
+            # print("Right cnrs are: \n", right_cnrs)
+            # print("Left cnrs are: \n", left_cnrs)
             highest_cnr = [rx_ave, ry_ave]
             for cnr in right_cnrs:
                 if cnr[1] < highest_cnr[1]:
                     highest_cnr = cnr
             image_cnrs.append(highest_cnr)
-            
+
             rightmost_cnr = [rx_ave, ry_ave]
             for cnr in right_cnrs:
                 if cnr[0] > rightmost_cnr[0]:
                     rightmost_cnr = cnr
             image_cnrs.append(rightmost_cnr)
         else:
-            image_cnrs.append(right_cnrs[0])    #easier than looping since already know only 2 elements
+            image_cnrs.append(right_cnrs[0])    # easier than looping since already know only 2 elements
             image_cnrs.append(right_cnrs[1])
 
         if len(image_cnrs) == 4:
             return image_cnrs
-        return None     #cnr searching did not work if not have 4 pts. Also, solvePNP will crash without exactly 4 pts
-        
+        return None     # cnr searching did not work if not have 4 pts. Also, solvePNP will crash without exactly 4 pts
 
     def preallocate_arrays(self, shape):
         '''Pre-allocate work arrays to save time'''
@@ -278,21 +316,43 @@ class RRTargetFinder2019(object):
 
             # image_corners = RRTargetFinder2019.get_outside_corners(cnt_left, cnt_right)
 
+            # # Important to get the corners in the right order, matching the real world ones
+            # # Remember that y in the image increases *down*
+            # left = RRTargetFinder2019.get_outside_corners_single(cnt_left, True)
+            # right = RRTargetFinder2019.get_outside_corners_single(cnt_right, False)
+            # # [left_bottom, left_top, right_top, right_bottom]
+            # image_corners = numpy.float32(numpy.array((left[1], left[0], right[0], right[1])))
+
             # Important to get the corners in the right order, matching the real world ones
             # Remember that y in the image increases *down*
-            left = RRTargetFinder2019.get_outside_corners_single(cnt_left, True)
-            right = RRTargetFinder2019.get_outside_corners_single(cnt_right, False)
-            image_corners = numpy.float32(numpy.array((left[1], left[0], right[0], right[1]))) 
-                                                    #[left_bottom, left_top, right_top, right_bottom]
+            # [bottom, top_outside, top_inside]
+            left = RRTargetFinder2019.get_outside_and_top_corners(cnt_left, True)
+            right = RRTargetFinder2019.get_outside_and_top_corners(cnt_right, False)
 
-            print()
-            print("all cnt_left corners:\n", cnt_left)
-            print("all cnt_right corners:\n", cnt_right)
-            print("Outside corners:\n", image_corners)
-            print("Real World target_coords:\n", self.outside_target_coords)
+            # fit 6 points
+            # [left_bottom, left_top_out, left_top_right, right_top_left, right_top_right, right_bottom]
+            image_corners = numpy.float32(numpy.array((left[0], left[1], left[2], right[2], right[1], right[0])))
+
+            # temp: compute here. Later, make them permanent
+            real_corners = numpy.array((self.left_strip[2], self.left_strip[1], self.left_strip[0],
+                                        self.right_strip[0], self.right_strip[1], self.right_strip[2]))
+
+            # # fit top 4 points
+            # # [left_top_out, left_top_right, right_top_left, right_top_right]
+            # image_corners = numpy.float32(numpy.array((left[1], left[2], right[2], right[1])))
+
+            # # temp: compute here. Later, make them permanent
+            # real_corners = numpy.array((self.left_strip[1], self.left_strip[0],
+            #                             self.right_strip[0], self.right_strip[1]))
+
+            # print()
+            # print("all cnt_left corners:\n", cnt_left)
+            # print("all cnt_right corners:\n", cnt_right)
+            # print("Outside corners:\n", image_corners)
+            # print("Real World target_coords:\n", real_corners)
             self.outer_corners = image_corners
 
-            retval, rvec, tvec = cv2.solvePnP(self.outside_target_coords, image_corners,
+            retval, rvec, tvec = cv2.solvePnP(real_corners, image_corners,
                                               self.cameraMatrix, self.distortionMatrix)
             if retval:
                 result = [1.0, self.finder_id, ]
@@ -316,8 +376,8 @@ class RRTargetFinder2019(object):
         # for loc in self.target_locations:
         #     cv2.drawMarker(output_frame, loc, (0, 255, 255), cv2.MARKER_TILTED_CROSS, 15, 3)
 
-        #if self.target_contours is not None:
-        #    cv2.drawContours(output_frame, self.target_contours, -1, (255, 0, 0), 1)
+        # if self.target_contours is not None:
+        #     cv2.drawContours(output_frame, self.target_contours, -1, (255, 0, 0), 1)
 
         return output_frame
 
@@ -338,7 +398,7 @@ class RRTargetFinder2019(object):
         cand_width = candidate['widths'][0]
         cand_height = candidate['widths'][1]
 
-        print("Target center at: (" + str(cand_x) + ", " + str(cand_y) + ")")
+        # print("Target center at: (" + str(cand_x) + ", " + str(cand_y) + ")")
 
         # print('ratio:', cand_width / candidate['widths'][1])
         if cand_width / cand_height > self.width_separation_ratio_max:
@@ -373,14 +433,14 @@ class RRTargetFinder2019(object):
             for test_loc in test_locations:
                 # negative is outside. I want the other sign
                 dist = -cv2.pointPolygonTest(c['contour'], test_loc, measureDist=True)
-                #print("Current center:", c['center'][0], c['center'][1])
-                #print("Dist from cadidate to test location is: %s" % dist)
-                #print("Distance (target seperation) is: %s" % distance)
-                #diff = dist < distance
-                #print("Is dist < distance? %s" % diff)
+                # print("Current center:", c['center'][0], c['center'][1])
+                # print("Dist from cadidate to test location is: %s" % dist)
+                # print("Distance (target seperation) is: %s" % distance)
+                # diff = dist < distance
+                # print("Is dist < distance? %s" % diff)
                 if dist < distance:
                     second_cont_index = ci
-                    #print("Resetting the second_cont_index to", c['center'][0], c['center'][1])
+                    # print("Resetting the second_cont_index to", c['center'][0], c['center'][1])
                     distance = dist
                     if dist <= 0:   # WARNING: the docs say that dist is (-) when outside the contour, not inside?!
                         # guessed location is inside this contour, so this is the one. No need to search further
@@ -441,9 +501,9 @@ class RRTargetFinder2019(object):
 
         all_contours = [candidate['contour'], contour_list[second_cont_index]['contour']]
 
-        print("Is third contour present: ", (third_cont_index is not None))
+        # print("Is third contour present: ", (third_cont_index is not None))
 
-        if third_cont_index is not None:    #TODO: if 2 cables on elevator, introduces possibility of perhaps 4 contours
+        if third_cont_index is not None:    # TODO: if 2 cables on elevator, introduces possibility of perhaps 4 contours
             all_contours.append(contour_list[third_cont_index]['contour'])
             full_strip = numpy.vstack((all_contours[1], all_contours[2]))
             hull_a = cv2.convexHull(full_strip)
@@ -457,13 +517,14 @@ class RRTargetFinder2019(object):
         target_contour_b = RRTargetFinder2019.quad_fit(hull_b, self.approx_polydp_error)
 
         if (len(target_contour_a) == 4 or len(target_contour_a) == 5) and (len(target_contour_b) == 4 or len(target_contour_b) == 5):
-            print("****returning the 2 contours :-)")
+            # print("****returning the 2 contours :-)")
             if candidate['center'][0] < contour_list[second_cont_index]['center'][0]:
-                #[left_contour, right_contour]
-                return [target_contour_b, target_contour_a] #candidate contour (largest) is under b
+                # [left_contour, right_contour]
+                return [target_contour_b, target_contour_a]  # candidate contour (largest) is under b
             else:
                 return [target_contour_a, target_contour_b]
-        print("****returning None :-(")
+
+        # print("****returning None :-(")
         return None
 
     def compute_output_values(self, rvec, tvec):
